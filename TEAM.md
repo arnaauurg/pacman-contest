@@ -2,7 +2,7 @@
 
 **Course:** IA Course - UPF 
 
-**Semester:** Semester 1, 2025
+**Semester:** Semester 1, 2026
 
 **Instructor:** Anders Jhonson
 
