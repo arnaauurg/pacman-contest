@@ -13,9 +13,9 @@ from contest.capture_agents import CaptureAgent
 from contest.game import Directions, Actions
 from contest.util import nearest_point
 
-#####################
-# Search algorithms #
-#####################
+##########################
+## SEARCH ALGORITHMS #####
+##########################
 
 #the search algorithms seen in class: bfs, ucs, a* and minimax with alpha-beta.
 #all of them work over a search problem with the same interface as in the course
@@ -282,7 +282,7 @@ def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, term
 
 
 #################
-# Helpers #
+# HELPERS     ###
 #################
 
 
@@ -401,9 +401,9 @@ def bfs_to_goal_avoiding(start, goal, walls, danger_positions):
     return bfs_to_goal(start, goal, walls)
 
 
-#####################
-# Team Coordination #
-#####################
+#######################
+## TEAM TACTICS #######
+#######################
 
 #We create a shared team state for coordination between agents
 
@@ -447,9 +447,9 @@ def get_agent_zone(index):
         return 'bottom'
 
 
-#################
-# Team creation #
-#################
+#####################
+## TEAM CREATION ####
+#####################
 
 """
 def create_team(first_index, second_index, is_red,
@@ -470,9 +470,9 @@ def create_team(first_index, second_index, is_red,
     # DEBUG: both offensive class
     return [DefensiveReflexAgent(first_index), OffensiveReflexAgent(second_index)]
 
-##########
-# Agents #
-##########
+##############
+## AGENTS ####
+##############
 
 class ReflexCaptureAgent(CaptureAgent):
     """
