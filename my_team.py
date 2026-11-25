@@ -10,12 +10,61 @@ import random
 import contest.util as util
 
 from contest.capture_agents import CaptureAgent
-from contest.game import Directions
+from contest.game import Directions, Actions
 from contest.util import nearest_point
 
-#################
-# Helpers #
-#################
+#####################
+# Search algorithms #
+#####################
+
+#the search algorithms seen in class: bfs, ucs, a* and minimax with alpha-beta.
+#all of them work over a search problem with the same interface as in the course
+#(get_start_state, is_goal_state, get_successors)
+
+#the goal of this refactor is to move from hardcoded agents (one always attacks, the other
+#always defends, with fixed plans like patrolling top/bottom) to more flexible agents that
+#decide every turn what to do. For that the search has to be generic: GridPathProblem lets
+#us ask for a path from anywhere to any set of goals, only through the cells we allow
+#(e.g. cells that are safe from ghosts) and with our own step costs
+
+class GridPathProblem:
+
+    """
+    Search problem on the maze grid.
+    start: cell where we start
+    goals: set of goal cells
+    allowed: (optional) set of cells the path can use, e.g. the cells we know are safe
+    cost_fn: (optional) cost of stepping into a cell, 1 by default
+    """
+
+    def __init__(self, neighbors, start, goals, allowed=None, cost_fn=None):
+        self.neighbors = neighbors
+        self.start = start
+        self.goals = set(goals)
+        self.allowed = allowed
+        self.cost_fn = cost_fn or (lambda c: 1)
+
+    def get_start_state(self):
+        return self.start
+
+    def is_goal_state(self, state):
+        return state in self.goals
+
+    def get_successors(self, state):
+
+        """
+        Returns a list of (next_state, action, cost) like in the course problems.
+        """
+        x, y = state
+        out = []
+        for n in self.neighbors[state]:
+
+            #skip cells outside the allowed region (the goal is always allowed)
+            if self.allowed is not None and n not in self.allowed and n not in self.goals:
+                continue
+            action = Actions.vector_to_direction((n[0] - x, n[1] - y))
+            out.append((n, action, self.cost_fn(n)))
+        return out
 
 
 def null_heuristic(state, problem=None):
@@ -68,8 +117,12 @@ def depth_first_search(problem):
             for child in successors:
                 [state, action, cost_state] = child
                 
-                # skip if already explored or in frontier
-                if (not state in explored_state and not frontier_dfs.contains(child)):
+                # skip if already explored
+                #before we also checked "frontier_dfs.contains(child)" but util.Stack has no
+                #contains method, so dfs crashed with an error if it was ever called.
+                #checking explored is enough: if a state is pushed twice, the second time
+                #we pop it, it is already explored and we skip it (the explored check after pop)
+                if (not state in explored_state):
                     
                     # we add new action to current path
                     new_path = path + [action]
@@ -114,7 +167,14 @@ def breadth_first_search(problem):
                 [state, action, cost_state] = child
                 
                 # add only new unexplored states
-                if (not state in explored_bfs and not child in frontier_bfs.list):
+                #before we also checked "not child in frontier_bfs.list" to not repeat states,
+                #but it never worked: child is a tuple (state, action, cost) and the frontier
+                #keeps lists [state, path, cost], a tuple is never equal to a list, so the check
+                #was always true. And "in" goes through the whole frontier for every child,
+                #that is O(n) each time, the expensive part we saw.
+                #repeated states in the queue are harmless: when popped they are already
+                #explored and skipped, and bfs still returns the shortest path
+                if (not state in explored_bfs):
                     new_path = path + [action]
                     new_state = [state, new_path, cost_state]
                     frontier_bfs.push(new_state)
@@ -153,8 +213,13 @@ def a_star_search(problem, heuristic=null_heuristic):
             for child in successors:
                 [state, action, cost_state] = child 
                 
-                # we check if worth exploring or not                                
-                if (not state in a_explored and not child in a_frontier.heap):
+                # we check if worth exploring or not
+                #same as in bfs: "not child in a_frontier.heap" compared (state, action, cost)
+                #with the heap entries (priority, count, item), never equal, and O(n) per child.
+                #in a* we even want repeated states in the queue: a later push of the same
+                #state can be cheaper, the queue pops the cheapest one first and the
+                #explored check when popping throws away the expensive copies
+                if (not state in a_explored):
                     
                     # we add the current cost
                     new_cost = cost_state + cost
@@ -164,6 +229,72 @@ def a_star_search(problem, heuristic=null_heuristic):
                     # we calculate the heuristic value: f(n) = g(n) + h(n)
                     h = new_cost + heuristic(new_state[0], problem)
                     a_frontier.push(new_state, h)
+
+
+def manhattan_heuristic(state, problem):
+
+    """
+    Manhattan distance to the closest goal.
+    It is admissible because every step costs at least 1 and walls only make paths longer.
+    """
+    return min(util.manhattan_distance(state, g) for g in problem.goals)
+
+
+def uniform_cost_search(problem):
+
+    """
+    Search the node of least total cost first.
+    Ucs is exactly a* with the null heuristic.
+    """
+    return a_star_search(problem, null_heuristic)
+
+
+def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, terminal):
+
+    """
+    Depth limited minimax with alpha-beta pruning.
+    successors(state, maximizing): list of (move, next_state)
+    evaluate(state): value of a non terminal state when we reach the depth limit
+    terminal(state): value if the state is terminal (caught, escaped...), else None
+    Returns (value, best_move) for the player that moves at this node.
+    """
+    t = terminal(state)
+    if t is not None:
+        return t, None
+    if depth == 0:
+        return evaluate(state), None
+
+    best_move = None
+
+    #max player: our agent
+    if maximizing:
+        value = float('-inf')
+        for move, nxt in successors(state, True):
+            v, _ = alpha_beta(nxt, depth - 1, alpha, beta, False, successors, evaluate, terminal)
+            if v > value:
+                value, best_move = v, move
+            alpha = max(alpha, value)
+
+            #min player already has a better option somewhere else, we prune
+            if alpha >= beta:
+                break
+
+    #min player: the enemy agent
+    else:
+        value = float('inf')
+        for move, nxt in successors(state, False):
+            v, _ = alpha_beta(nxt, depth - 1, alpha, beta, True, successors, evaluate, terminal)
+            if v < value:
+                value, best_move = v, move
+            beta = min(beta, value)
+            if alpha >= beta:
+                break
+    return value, best_move
+
+
+#################
+# Helpers #
+#################
 
 
 def bfs_to_goal(start, goal, walls):
