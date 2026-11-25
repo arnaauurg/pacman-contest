@@ -11,10 +11,10 @@ import contest.util as util
 
 from contest.capture_agents import CaptureAgent
 from contest.game import Directions, Actions
-from contest.util import nearest_point
 
 #game constants (same values as in capture.py)
 SIGHT_RANGE = 5     #we see exact enemy positions only within this manhattan distance
+
 
 ##########################
 ## SEARCH ALGORITHMS #####
@@ -284,124 +284,18 @@ def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, term
     return value, best_move
 
 
-#################
-# HELPERS     ###
-#################
+#####################
+## TEAM CREATION ####
+#####################
 
+def create_team(first_index, second_index, is_red,
+                first='AttackAgent', second='DefendAgent', num_training=0):
 
-def bfs_to_goal(start, goal, walls):
     """
-    Bfs adapted to find path between two positions on the map.
-    Returns list of actions or empty list if no path found.
+    This function should return a list of two agents that will form the
+    team. One agent attacks and the other one defends.
     """
-    if start == goal:
-        return []
-    
-    # set to track visited nodes
-    explored_bfs = set()
-    frontier_bfs = util.Queue()
-    
-    # map of actions to movements
-    actions_map = {
-        Directions.NORTH: (0, 1),
-        Directions.SOUTH: (0, -1),
-        Directions.EAST: (1, 0),
-        Directions.WEST: (-1, 0),
-    }
-    
-    # initialize with start position and empty path
-    start_state = [start, []]
-    frontier_bfs.push(start_state)
-    
-    # continue until queue is empty
-    while not frontier_bfs.is_empty():
-        [current_pos, path] = frontier_bfs.pop()
-        
-        # skip if already explored
-        if current_pos in explored_bfs:
-            continue
-        
-        explored_bfs.add(current_pos)
-        
-        # check if we reached the goal
-        if current_pos == goal:
-            return path
-        
-        # explore all possible directions
-        for action, (dx, dy) in actions_map.items():
-            next_pos = (int(current_pos[0] + dx), int(current_pos[1] + dy))
-            
-            # check boundaries
-            if next_pos[0] < 0 or next_pos[0] >= walls.width:
-                continue
-            if next_pos[1] < 0 or next_pos[1] >= walls.height:
-                continue
-            # check walls
-            if walls[next_pos[0]][next_pos[1]]:
-                continue
-            
-            # add unexplored positions to frontier
-            if next_pos not in explored_bfs:
-                new_path = path + [action]
-                frontier_bfs.push([next_pos, new_path])
-    
-    # no path found
-    return []
-
-
-def bfs_to_goal_avoiding(start, goal, walls, danger_positions):
-    """
-    Bfs that avoids certain positions (like ghost positions).
-    Returns list of actions or empty list if no path found.
-    """
-    if start == goal:
-        return []
-    
-    explored_bfs = set()
-    frontier_bfs = util.Queue()
-    
-    actions_map = {
-        Directions.NORTH: (0, 1),
-        Directions.SOUTH: (0, -1),
-        Directions.EAST: (1, 0),
-        Directions.WEST: (-1, 0),
-    }
-    
-    start_state = [start, []]
-    frontier_bfs.push(start_state)
-    
-    while not frontier_bfs.is_empty():
-        [current_pos, path] = frontier_bfs.pop()
-        
-        if current_pos in explored_bfs:
-            continue
-        
-        explored_bfs.add(current_pos)
-        
-        if current_pos == goal:
-            return path
-        
-        for action, (dx, dy) in actions_map.items():
-            next_pos = (int(current_pos[0] + dx), int(current_pos[1] + dy))
-            
-            # check boundaries
-            if next_pos[0] < 0 or next_pos[0] >= walls.width:
-                continue
-            if next_pos[1] < 0 or next_pos[1] >= walls.height:
-                continue
-            # check walls
-            if walls[next_pos[0]][next_pos[1]]:
-                continue
-            # avoid danger positions
-            if next_pos in danger_positions:
-                continue
-            
-            if next_pos not in explored_bfs:
-                new_path = path + [action]
-                frontier_bfs.push([next_pos, new_path])
-    
-    #if its not a safe path found, try without avoiding dangers
-    return bfs_to_goal(start, goal, walls)
+    return [eval(first)(first_index), eval(second)(second_index)]
 
 
 ####################
@@ -490,48 +384,6 @@ class MapInfo:
 ## TEAM TACTICS #######
 #######################
 
-#We create a shared team state for coordination between agents
-
-class TeamState:
-    
-    """
-    Sheared state between team agents for coordination.
-    """
-    agent_targets = {}      # {agent_index: target_position}
-    agent_positions = {}    # {agent_index: current_position}
-
-
-def get_food_by_zone(food_list, walls, zone='top'):
-    
-    """
-    We split the food into top and bottom zones to divide attack zones.
-    Returns food in the specified zone for each of the agents.
-    """
-    if not food_list:
-        return []
-    
-    mid_y = walls.height // 2
-    
-    if zone == 'top':
-        return [f for f in food_list if f[1] >= mid_y]
-    else:  # bottom
-        return [f for f in food_list if f[1] < mid_y]
-
-
-def get_agent_zone(index):
-    
-    """
-    We assign a zone to each agent based on their index.
-    Lower index -> top zone, higher index -> bottom zone.
-    """
-    
-    
-    if index % 2 == 0:
-        return 'top'
-    else:
-        return 'bottom'
-
-
 class TeamMemory:
 
     """
@@ -548,572 +400,9 @@ class TeamMemory:
 _MEMORY = {}
 
 
-#####################
-## TEAM CREATION ####
-#####################
-
-"""
-def create_team(first_index, second_index, is_red,
-                first='OffensiveReflexAgent', second='DefensiveReflexAgent', num_training=0):
-    """ """
-    This function should return a list of two agents that will form the
-    team, initialized using firstIndex and secondIndex as their agent
-    index numbers.  isRed is True if the red team is being created, and
-    will be False if the blue team is being created.
-
-    """ """
-    return [eval(first)(first_index), eval(second)(second_index)]
-"""
-
-
-def create_team(first_index, second_index, is_red,
-                first='OffensiveReflexAgent', second='DefensiveReflexAgent', num_training=0):
-    return [DefendAgent(first_index), OffensiveReflexAgent(second_index)]
-
 ##############
 ## AGENTS ####
 ##############
-
-class ReflexCaptureAgent(CaptureAgent):
-    """
-    A base class for reflex agents that choose score-maximizing actions
-    """
-
-    def __init__(self, index, time_for_computing=.1):
-        super().__init__(index, time_for_computing)
-        self.start = None
-
-    def register_initial_state(self, game_state):
-        self.start = game_state.get_agent_position(self.index)
-        CaptureAgent.register_initial_state(self, game_state)
-
-    def choose_action(self, game_state):
-        """
-        Picks among the actions with the highest Q(s,a).
-        """
-        actions = game_state.get_legal_actions(self.index)
-        values = [self.evaluate(game_state, a) for a in actions]
-
-        max_value = max(values)
-        best_actions = [a for a, v in zip(actions, values) if v == max_value]
-
-        food_left = len(self.get_food(game_state).as_list())
-
-        if food_left <= 2:
-            best_dist = 9999
-            best_action = None
-            for action in actions:
-                successor = self.get_successor(game_state, action)
-                pos2 = successor.get_agent_position(self.index)
-                dist = self.get_maze_distance(self.start, pos2)
-                if dist < best_dist:
-                    best_action = action
-                    best_dist = dist
-            return best_action
-
-        return random.choice(best_actions)
-
-    def get_successor(self, game_state, action):
-        """
-        Finds the next successor which is a grid position (location tuple).
-        """
-        successor = game_state.generate_successor(self.index, action)
-        pos = successor.get_agent_state(self.index).get_position()
-        if pos != nearest_point(pos):
-            # only half a grid position was covered
-            return successor.generate_successor(self.index, action)
-        else:
-            return successor
-
-    def evaluate(self, game_state, action):
-        """
-        Computes a linear combination of features and feature weights
-        """
-        features = self.get_features(game_state, action)
-        weights = self.get_weights(game_state, action)
-        return features * weights
-
-    def get_features(self, game_state, action):
-        """
-        Returns a counter of features for the state
-        """
-        features = util.Counter()
-        successor = self.get_successor(game_state, action)
-        features['successor_score'] = self.get_score(successor)
-        return features
-
-    def get_weights(self, game_state, action):
-        """
-        Normally, weights do not depend on the game state.  They can be either
-        a counter or a dictionary.
-        """
-        return {'successor_score': 1.0}
-
-
-class OffensiveReflexAgent(ReflexCaptureAgent):
-    """
-    A reflex agent that seeks food. This is an agent
-    we give you to get an idea of what an offensive agent might look like,
-    but it is by no means the best or only way to build an offensive agent.
-    
-    Uses BFS planning only for:
-    - returning home when carrying food (plan mode: 'return_home')
-    - going for capsules when ghosts are near (plan mode: 'capsule')
-    
-    Uses reflex behavior (features/weights) for normal food chasing.
-    """
-    
-    #thresholds/limits  for planning decisions!!!
-    
-    CARRY_THRESHOLD = 3     #the food to caarry before returning home
-    FOOD_LEFT_THRESHOLD = 6    #remainiing food to trigger return
-    GHOST_DANGER_DIST = 3   #distance to consider ghost dangerous
-    CAPSULE_TRIGGER_DIST = 6   #ghoost distance to trigger capsule plan
-    
-    def register_initial_state(self, game_state):
-        
-        """
-        Initializes agent and pre-calculates boundary positions.
-        Sets up planning attributes.
-        """
-        super().register_initial_state(game_state)
-        self.boundary_positions = self._calculate_boundary(game_state)
-        self.walls = game_state.get_walls()
-        
-        width = self.walls.width
-        
-        if self.red:
-            self.enemy_boundary_x = width // 2  #boundary
-        else:
-            self.enemy_boundary_x = width // 2 - 1
-        
-        #our game state planning attributes
-        self.plan = []             #list of actions to follow
-        self.plan_mode = None    #return_home', 'capsule'..
-        self.plan_target = None    #target position for current plan
-        
-        #coordination attributes
-        self.my_zone = get_agent_zone(self.index)  # 'top' or 'bottom'
-        
-        team_indices = self.get_team(game_state)
-        
-        if self.index == team_indices[0]:
-            self.my_zone = 'top'
-        else:
-            self.my_zone = 'bottom' #second agent created assigned bottom
-            
-        self.turns = 0
-        #self.turns = 0
-        
-        #we dont lose one agent allways defending
-        self.attack_turns = 80  #both agents attack during first mturns
-               
-        #team state
-        TeamState.agent_positions[self.index] = self.start
-        TeamState.agent_targets[self.index] = None
-    
-    def _calculate_boundary(self, game_state):
-        """
-        Calculates valid positions at the boundary of our territory.
-        """
-        walls = game_state.get_walls()
-        width = walls.width
-        height = walls.height
-        
-        #boundary depends on the team color
-        if self.red:
-            boundary_x = width // 2 - 1
-        else:
-            boundary_x = width // 2
-        
-        positions = []
-        for y in range(height):
-            if not walls[boundary_x][y]:
-                positions.append((boundary_x, y))
-        
-        return positions
-    
-    def choose_action(self, game_state):
-        
-        """
-        Main decision function. Uses planning for key moments,
-        reflex behavior for normal food chasing.
-        """
-    
-        self.turns += 1
-    
-        my_state = game_state.get_agent_state(self.index)
-        my_pos = my_state.get_position()
-        my_pos_int = (int(my_pos[0]), int(my_pos[1]))
-    
-        #update team state for coordination
-        TeamState.agent_positions[self.index] = my_pos_int
-    
-        #get enemy info
-        enemies = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
-        ghosts = [e for e in enemies if not e.is_pacman and e.get_position() is not None]
-        dangerous_ghosts = [g for g in ghosts if g.scared_timer <= 2]
-    
-    
-        #check if current plan is still valid or heuristics of the game has changed
-        if self.plan:
-            if self._is_plan_valid(game_state, my_state, my_pos_int):
-                action = self.plan.pop(0)
-                if action in game_state.get_legal_actions(self.index):
-                    return action
-            self._clear_plan()
-    
-        #check if we should enter return_home mode
-        if self._should_return_home(game_state, my_state):
-            return self._plan_return_home(game_state, my_pos_int, dangerous_ghosts)
-    
-        #check if we should go for a capsule
-        if self._should_get_capsule(game_state, my_state, my_pos_int, dangerous_ghosts):
-            return self._plan_capsule(game_state, my_pos_int)
-    
-        #default: use reflex behavior for food chasing
-        return self._reflex_action(game_state)
-    
-    def _is_plan_valid(self, game_state, my_state, my_pos):
-        """
-        Checks if the current plan is still valid.
-        """
-        
-        if self.plan_mode == 'return_home':
-            #valid if still pacman and carrying food
-            return my_state.is_pacman and my_state.num_carrying > 0
-        
-        elif self.plan_mode == 'capsule':
-            #valid if capsule still exists and we can "make a play"
-            capsules = self.get_capsules(game_state)
-            return self.plan_target in capsules
-        
-        return False
-    
-    def _clear_plan(self):
-        """
-        Clears the current plan.
-        """
-        self.plan = []
-        self.plan_mode = None
-        self.plan_target = None
-    
-    def _should_return_home(self, game_state, my_state):
-        """
-        Checks if agent should return home to deposit food.
-        """
-        if not my_state.is_pacman:
-            return False
-        
-        food_left = len(self.get_food(game_state).as_list())
-        num_carrying = my_state.num_carrying
-        
-        #return if carrying enough food or few food left
-        return (num_carrying >= self.CARRY_THRESHOLD )
-    
-    def _should_get_capsule(self, game_state, my_state, my_pos, dangerous_ghosts):
-        """
-        Checks if agent should go for a capsule.
-        """
-        capsules = self.get_capsules(game_state)
-        
-        if not capsules:
-            return False
-        
-        if not my_state.is_pacman:
-            return False
-        
-        #check if there's a dangerous ghost nearby
-        if dangerous_ghosts:
-            
-            min_ghost_dist = min(self.get_maze_distance(my_pos, g.get_position()) for g in dangerous_ghosts)
-            
-            #go for capsule if ghost is close enough to be a threat
-            return min_ghost_dist <= self.CAPSULE_TRIGGER_DIST
-        
-        return False
-    
-    def _plan_return_home(self, game_state, my_pos, dangerous_ghosts):
-        
-        """
-        Creates a plan to return home and let the food.
-        So we can cash back the points from the food.
-        Uses BFS once to find path to closest boundary.
-        """
-        #find closest boundary position
-        target = min(self.boundary_positions, key=lambda b: self.get_maze_distance(my_pos, b))
-        
-        #get danger positions to avoid
-        danger_positions = self._get_danger_positions(dangerous_ghosts)
-        
-        #compute path using bfs (only once)
-        path = bfs_to_goal_avoiding(my_pos, target, self.walls, danger_positions)
-        
-        if path:
-            self.plan = path
-            self.plan_mode = 'return_home'
-            self.plan_target = target
-            return self.plan.pop(0)
-        
-        #fallback to reflex if no path found
-        return self._reflex_action(game_state)
-    
-    def _plan_capsule(self, game_state, my_pos):
-        """
-        Creates a plan to get a capsule.
-        Uses BFS once to find path to closest capsule.
-        """
-        capsules = self.get_capsules(game_state)
-        
-        if not capsules:
-            return self._reflex_action(game_state)
-        
-        #find closest capsule
-        target = min(capsules, key=lambda c: self.get_maze_distance(my_pos, c))
-        
-        #compute path using bfs (only once)
-        path = bfs_to_goal(my_pos, target, self.walls)
-        
-        if path:
-            self.plan = path
-            self.plan_mode = 'capsule'
-            self.plan_target = target
-            return self.plan.pop(0)
-        
-        #fallback to reflex if no path found
-        return self._reflex_action(game_state)
-    
-    def _get_danger_positions(self, dangerous_ghosts):
-        """
-        Returns set of positions to avoid (near ghosts).
-        """
-        danger = set()
-        for g in dangerous_ghosts:
-            gpos = g.get_position()
-            gpos = (int(gpos[0]), int(gpos[1]))
-            # mark ghost position and adjacent cells as dangerous
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    danger.add((gpos[0] + dx, gpos[1] + dy))
-        return danger
-    
-    def _reflex_action(self, game_state):
-        
-        """
-        Uses reflex behavior (features/weights) to choose action.
-        This is the default behavior for normal food chasing.
-        """
-        actions = game_state.get_legal_actions(self.index)
-        values = [self.evaluate(game_state, a) for a in actions]
-        
-        max_value = max(values)
-        best_actions = [a for a, v in zip(actions, values) if v == max_value]
-        
-        # DEBUGG
-        my_pos = game_state.get_agent_state(self.index).get_position()
-        print(f"Agent {self.index} at {my_pos}, is_pacman={game_state.get_agent_state(self.index).is_pacman}")
-        
-        for a, v in zip(actions, values):
-            print(f"  {a}: {v:.1f}")
-        
-        if Directions.STOP in best_actions and len(best_actions) > 1:
-            best_actions.remove(Directions.STOP)
-        
-        return random.choice(best_actions)
-        
-    def _dist_to_boundary(self, pos):
-        
-        return min(self.get_maze_distance(pos, b) for b in self.boundary_positions)
-    
-    def get_features(self, game_state, action):
-        
-        """
-        Returns features for reflex evaluation.
-        Zone-aware: prefers food in agent's assigned zone.
-        """
-        features = util.Counter()
-        successor = self.get_successor(game_state, action)
-        
-        
-        my_state = successor.get_agent_state(self.index)
-        my_pos = my_state.get_position()
-        
-        food_list = self.get_food(successor).as_list()
-        features['successor_score'] = -len(food_list)
-        
-        #we discourage not moving by penalizing it
-        if action == Directions.STOP:
-            features['stop'] = 1.0
-        
-        current_direction = game_state.get_agent_state(self.index).configuration.direction
-        
-        #there is not comming back from the same path, we dont encourage it
-        
-        if action == Directions.REVERSE.get(current_direction, None):
-            features['reverse'] = 1.0
-        
-        #encouraging exploring the map
-        
-        if action == current_direction and action != Directions.STOP:
-            features['forward'] = 2.5
-        
-        #if we are still ghost go around
-        if not my_state.is_pacman:
-            if self.red:
-                dist_to_enemy = self.enemy_boundary_x - my_pos[0]
-            else:
-                dist_to_enemy = my_pos[0] - self.enemy_boundary_x
-                
-            #only on our side    
-            if dist_to_enemy > 0:
-                features['distance_to_enemy_side'] = float(dist_to_enemy)
-                
-                
-        #distance to food - prefer food in my zone        
-        if len(food_list) > 0:
-            
-            food_list = self.get_food(successor).as_list()
-            
-            #gotta get food from my side of the map first
-            zone_food = get_food_by_zone(food_list, self.walls, self.my_zone)
-            
-            
-            #if there is no food in my zone look all food
-            if len(zone_food)>2:
-                target_food = list(zone_food)
-            else:
-                target_food = list(food_list)
-            
-            
-            #target_food = zone_food if zone_food else food_list
-            
-            #avoid food that teammate is targeting
-            teammate_target = self._get_teammate_target()
-            
-            if teammate_target and teammate_target in target_food and len(target_food) > 1:
-                target_food = [f for f in target_food if f != teammate_target]
-        
-            if target_food:
-                min_food_dist = min(self.get_maze_distance(my_pos, food) for food in target_food)
-                features['distance_to_food'] = float(min_food_dist)
-            
-                #upadte defensive agent for coordination purposes
-                closest_food = min(target_food, key=lambda f: self.get_maze_distance(my_pos, f))
-                TeamState.agent_targets[self.index] = closest_food
-    
-        #distance to capsules
-        capsules = self.get_capsules(successor)
-        if len(capsules) > 0:
-            min_capsule_dist = min(self.get_maze_distance(my_pos, cap) for cap in capsules)
-            features['distance_to_capsule'] = float(min_capsule_dist)
-    
-        #distance to home when carrying food
-        if my_state.is_pacman and my_state.num_carrying > 0:
-            
-            dist_home = self._dist_to_boundary(my_pos)
-            features['distance_to_home'] = float(dist_home)
-            features['num_carrying'] = float(my_state.num_carrying)
-            
-        #dangerous ghosts annd enemies handling
-        
-        enemies = [successor.get_agent_state(i) for i in self.get_opponents(successor)]
-        enemy_ghosts = [e for e in enemies if not e.is_pacman and e.get_position() is not None]
-        dangerous_ghosts = [g for g in enemy_ghosts if g.scared_timer == 0]
-        scared_ghosts = [g for g in enemy_ghosts if g.scared_timer > 0]
-        
-        if my_state.is_pacman and len(dangerous_ghosts) > 0:
-            
-            dists = [self.get_maze_distance(my_pos, g.get_position()) for g in dangerous_ghosts]
-            min_ghost_dist = min(dists)
-            
-            #!"""" key variable as distance to "bravery" against ghosts
-            if min_ghost_dist <= self.GHOST_DANGER_DIST:
-            
-                features['dangerous_ghost'] = 1.0 / (min_ghost_dist + 0.1)
-        
-        if my_state.is_pacman and len(scared_ghosts) > 0:
-            
-            dists = [self.get_maze_distance(my_pos, g.get_position()) for g in scared_ghosts]
-            min_scared_dist = min(dists)
-            features['scared_ghost'] = 1.0 / (min_scared_dist + 1.0)
-            
-        #this is to avoiod collision betweeen two agents
-        teammate_pos = self._get_teammate_position()
-        
-        #we dont want them attacking at the same place
-        if teammate_pos and my_state.is_pacman:
-            
-            #vertial distance penalitzation between the team
-            dist_to_teammate = self.get_maze_distance(my_pos, teammate_pos)
-            vertical_dist = abs(my_pos[1] - teammate_pos[1])
-            
-                                   
-            if dist_to_teammate <= 1:
-                features['too_close_teammate'] = 3.0
-            
-            if vertical_dist <= 2:
-                
-                features['too_close_teammate'] = float(3 - vertical_dist)
-        
-        return features
-    
-    def _get_teammate_target(self):
-        
-        """
-        Returns the target that teammate is going for.
-        """
-        for idx, target in TeamState.agent_targets.items():
-            if idx != self.index and target is not None:
-                return target
-        return None
-
-
-    def _get_teammate_position(self):
-        """
-        Returns teammate's current position.
-        """
-        for idx, pos in TeamState.agent_positions.items():
-            if idx != self.index:
-                return pos
-        return None
-    
-    
-    def get_weights(self, game_state, action):
-        
-        """
-        Reeturns weights for reflex evaluation.
-         """
-        weights = {
-        
-            'successor_score': 100.0,
-            'distance_to_food': -25.0, #food and points its superimportant
-            'distance_to_capsule': -40.0,
-            'distance_to_home': -10.0, #im comming home for christmas
-            'num_carrying': 5.0,
-            'dangerous_ghost': -220.0,
-            'scared_ghost': 350.0,
-            'stop': -50.0,
-            'forward': 10.0,
-            'reverse': -15.0,
-            'distance_to_enemy_side': -20.0,
-            'too_close_teammate': -35,  #we avoid clustering of pacmans/ghosts
-            }
-    
-        my_state = game_state.get_agent_state(self.index)
-        
-        #incentivize go enemy zone
-        if not my_state.is_pacman:
-            
-            weights['distance_to_food'] = -8.0
-            weights['distance_to_capsule'] = -10.0
-            
-        if not (my_state.is_pacman and my_state.num_carrying > 0):
-            
-            weights['distance_to_home'] = 0.0
-            weights['num_carrying'] = 0.0
-    
-        return weights
-
 
 class BaseAgent(CaptureAgent):
 
@@ -1492,6 +781,318 @@ class BaseAgent(CaptureAgent):
         if inv_pos is None and pos == target:
             return Directions.STOP
         return options[0][2]
+
+
+class AttackAgent(BaseAgent):
+
+    """
+    Offensive agent.
+    Every turn:
+    1. bfs to know which cells we reach before any ghost (the "safe region")
+    2. decide the target: home, capsule, scared ghost or the closest safe food
+    3. a* inside the safe region to go to the target
+    4. if there is no safe path at all, minimax to escape from the ghost
+    """
+
+    SAFETY = 1          #extra margin (in moves) we want against ghosts
+    MINIMAX_DEPTH = 6   #plies for the escape minimax (3 moves each)
+
+    def dangerous_ghosts(self, gs, pos):
+
+        """
+        Visible enemy ghosts that can eat us (not scared, or scared but about to wake up).
+        """
+        res = []
+        for e in self.enemies:
+            st = gs.get_agent_state(e)
+            p = st.get_position()
+            if p is None or st.is_pacman:
+                continue
+            p = (int(p[0]), int(p[1]))
+
+            #scared for longer than it takes us to get there -> not dangerous
+            if st.scared_timer > self.dist(pos, p) + 2:
+                continue
+            res.append(p)
+        return res
+
+    def safe_search(self, gs, start, ghosts):
+
+        """
+        Bfs from our position that only goes through cells we reach strictly before
+        any dangerous ghost. Returns the distances, the parents and the ghost distance function.
+        """
+        gd_cache = {}
+
+        #gd(c) = distance from the closest ghost to cell c
+        def gd(c):
+            if c not in gd_cache:
+                gd_cache[c] = min((self.dist(g, c) for g in ghosts), default=999)
+            return gd_cache[c]
+
+        dist = {start: 0}
+        parent = {start: None}
+        q = util.Queue()
+        q.push(start)
+        while not q.is_empty():
+            c = q.pop()
+            t = dist[c]
+            for n in self.map.neighbors[c]:
+                if n in dist:
+                    continue
+
+                #on our side ghosts cant eat us. On their side we must arrive at n
+                #(at time t+1) before the ghost can
+                if not self.map.is_home(n) and gd(n) <= t + self.SAFETY:
+                    continue
+                if not self.map.is_home(n) and n in ghosts:
+                    continue
+                dist[n] = t + 1
+                parent[n] = c
+                q.push(n)
+        return dist, parent, gd
+
+    def first_step(self, parent, target):
+
+        """
+        Walks back the bfs parents to get the first cell of the path to target.
+        """
+        c = target
+        while parent[c] is not None and parent[parent[c]] is not None:
+            c = parent[c]
+        return c
+
+    def is_trap(self, cell, t, gd):
+
+        """
+        True if going to cell (we arrive at time t) can get us trapped in a dead end:
+        the ghost reaches the mouth of the corridor before we get out.
+        """
+        d = self.map.depth[cell]
+        if d == 0:
+            return False
+        mouth = self.map.exit[cell]
+        return gd(mouth) <= t + d + self.SAFETY
+
+    def choose_action(self, gs):
+
+        """
+        Main offensive decision function.
+        """
+        self.turn += 1
+        self.update_beliefs(gs)
+        pos = self.my_pos(gs)
+        st = gs.get_agent_state(self.index)
+        carrying = st.num_carrying
+        ghosts = self.dangerous_ghosts(gs, pos)
+
+        #1. safe region with bfs
+        dist, parent, gd = self.safe_search(gs, pos, ghosts)
+
+        food = self.get_food(gs).as_list()
+        caps = self.get_capsules(gs)
+        moves_left = self.moves_left(gs)
+        home_cells = [b for b in self.map.boundary if b in dist]
+        true_home = min(self.dist(pos, b) for b in self.map.boundary)
+        score = self.get_score(gs)
+
+        #end of the game and we are winning: stay home and defend the lead
+        if st.is_pacman is False and score > 0 and moves_left < 40:
+            return self.defend_action(gs)
+
+        #invader close to us while we are still on our side: we eat it first
+        if not st.is_pacman and st.scared_timer == 0:
+            for e in self.enemies:
+                es = gs.get_agent_state(e)
+                ep = es.get_position()
+                if es.is_pacman and ep is not None and self.dist(pos, ep) <= 4:
+                    return self.defend_action(gs)
+
+        ghost_near = min((self.dist(pos, g) for g in ghosts), default=999)
+
+        #nobody defending their side (both enemies are pacman): we can carry more food
+        undefended = all(gs.get_agent_state(e).is_pacman for e in self.enemies) and not ghosts
+
+        #2. should we go home to cash the food?
+        go_home = False
+        if carrying > 0:
+            if moves_left <= true_home + 4:
+                go_home = True      #game is ending, food carried is worth nothing
+            elif len(food) <= 2:
+                go_home = True      #we already ate all the food we need
+            elif ghost_near <= 5 and carrying >= 2:
+                go_home = True      #ghost close, dont risk what we have
+            elif carrying >= 8 and not undefended:
+                go_home = True      #carrying a lot
+            elif carrying >= 4 and true_home <= 3 and not undefended:
+                go_home = True      #home is very close, cheap to cash
+            elif score + carrying >= self.total_food - 2:
+                go_home = True      #cashing this wins the game
+
+        #targets we reach safely and that are not a trap
+        def safe_targets(cells):
+            out = []
+            for c in cells:
+                if c in dist and not self.is_trap(c, dist[c], gd):
+                    out.append((dist[c], c))
+            return out
+
+        target = None
+        if go_home:
+            if home_cells:
+                target = min(home_cells, key=lambda b: dist[b])
+
+            #if home is cut off (or a ghost is on us) a capsule can save us
+            if target is None or (ghost_near <= 3 and caps):
+                sc = safe_targets(caps)
+                if sc and (target is None or min(sc)[0] < dist[target]):
+                    target = min(sc)[1]
+        else:
+            #ghost near: take a close safe capsule
+            if ghosts and ghost_near <= 5:
+                sc = safe_targets(caps)
+                if sc and min(sc)[0] <= 8:
+                    target = min(sc)[1]
+
+            #scared ghost very close: we eat it
+            if target is None:
+                for e in self.enemies:
+                    es = gs.get_agent_state(e)
+                    ep = es.get_position()
+                    if ep is None or es.is_pacman:
+                        continue
+                    ep = (int(ep[0]), int(ep[1]))
+                    if ep in dist and es.scared_timer > dist[ep] + 1 and dist[ep] <= 3:
+                        target = ep
+
+            #normal case: closest safe food
+            if target is None:
+                sf = safe_targets(food)
+                if sf:
+
+                    #avoid food that teammate is targeting (when it also attacks)
+                    mate_t = [t for i, t in self.mem.targets.items() if i != self.index and t]
+                    if mate_t and len(sf) > 1:
+                        sf = [x for x in sf if all(self.dist(x[1], m) > 3 for m in mate_t)] or sf
+                    target = min(sf)[1]
+                elif carrying > 0 and home_cells:
+                    target = min(home_cells, key=lambda b: dist[b])
+        self.mem.targets[self.index] = target
+
+        #3. go to the target with a* inside the safe region
+        if target is not None and target != pos:
+
+            #every step costs 1, plus a penalty when the cell is close to a ghost,
+            #so between two safe paths we take the one further from ghosts
+            def cost(c):
+                if not ghosts or self.map.is_home(c):
+                    return 1
+                return 1 + 8.0 / max(1, gd(c))
+            problem = GridPathProblem(self.map.neighbors, pos, [target], allowed=dist, cost_fn=cost)
+            path = a_star_search(problem, manhattan_heuristic)
+            if path and path[0] in gs.get_legal_actions(self.index):
+                return path[0]
+
+            #fallback: first step of the bfs path
+            nxt = self.first_step(parent, target)
+            a = self.action_to(gs, nxt)
+            if a is not None:
+                return a
+
+        #4. no safe target
+        #at home: move along the border to find an entrance without ghosts
+        if not st.is_pacman:
+            return self.reposition(gs, pos, ghosts)
+
+        #on their side: minimax against the ghost
+        if ghosts:
+            a = self.minimax_escape(gs, pos, ghosts, carrying)
+            if a is not None:
+                return a
+        return self.evade(gs, pos, ghosts)
+
+    def minimax_escape(self, gs, pos, ghosts, carrying):
+
+        """
+        Minimax with alpha-beta when we are in danger.
+        We (max) want to survive, get home or eat a capsule.
+        The closest ghost (min) wants to catch us, and it cant leave its side.
+        """
+        ghost = min(ghosts, key=lambda g: self.dist(pos, g))
+        caps = set(self.get_capsules(gs))
+        is_home = self.map.is_home
+        nb = self.map.neighbors
+        bnd = self.map.boundary
+
+        #a state is (our position, ghost position)
+        def successors(state, maximizing):
+            me, g = state
+            if maximizing:
+                return [(n, (n, g)) for n in nb[me]]
+            moves = [n for n in nb[g] if not is_home(n)] + [g]
+            return [(n, (me, n)) for n in moves]
+
+        def terminal(state):
+            me, g = state
+            if me == g:
+                return -1000                #caught
+            if is_home(me):
+                return 500 + 10 * carrying  #home safe, more food = better
+            if me in caps:
+                return 400                  #capsule, the ghost gets scared
+            return None
+
+        def evaluate(state):
+
+            #far from the ghost, out of dead ends and close to home is better
+            me, g = state
+            dg = self.dist(me, g)
+            dh = min(self.dist(me, b) for b in bnd)
+            return 6 * min(dg, 6) - 4 * self.map.depth[me] - 1.5 * dh
+
+        _, move = alpha_beta((pos, ghost), self.MINIMAX_DEPTH, float('-inf'), float('inf'),
+                             True, successors, evaluate, terminal)
+        return self.action_to(gs, move) if move is not None else None
+
+    def reposition(self, gs, pos, ghosts):
+
+        """
+        We are home and every entrance looks guarded.
+        We move to the border cell furthest from the ghosts to try to enter there.
+        """
+        if ghosts:
+            entry = max(self.map.boundary,
+                        key=lambda b: min(self.dist(b, g) for g in ghosts) - 0.3 * self.dist(pos, b))
+        else:
+            entry = random.choice(self.map.boundary)
+
+        #bfs only through our side, we dont want to cross while moving
+        home = {c for c in self.map.cells if self.map.is_home(c)}
+        path = breadth_first_search(GridPathProblem(self.map.neighbors, pos, [entry], allowed=home))
+        if path and path[0] in gs.get_legal_actions(self.index):
+            return path[0]
+        return Directions.STOP
+
+    def evade(self, gs, pos, ghosts):
+
+        """
+        Worst case scenario: no safe path and minimax gave nothing.
+        We take the action that keeps us far from ghosts, out of dead ends and close to home.
+        """
+        best, bs = Directions.STOP, -9999
+        for a in gs.get_legal_actions(self.index):
+            succ = gs.generate_successor(self.index, a)
+            np_ = succ.get_agent_position(self.index)
+            np_ = (int(np_[0]), int(np_[1]))
+            g = min((self.dist(np_, gp) for gp in ghosts), default=20)
+            s = 3 * min(g, 6) - 2 * self.map.depth[np_] - 0.5 * min(self.dist(np_, b) for b in self.map.boundary)
+            if g <= 1:
+                s -= 100
+            if self.map.is_home(np_):
+                s += 50
+            if s > bs:
+                best, bs = a, s
+        return best
 
 
 class DefendAgent(BaseAgent):
