@@ -6,7 +6,7 @@
 
 **Instructor:** Anders Jhonson
 
-**Team name:** _[replace this with team name in plan text]_
+**Team name:** HomeAlone
 
 **Team members:** 
 
