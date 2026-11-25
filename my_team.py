@@ -568,8 +568,7 @@ def create_team(first_index, second_index, is_red,
 
 def create_team(first_index, second_index, is_red,
                 first='OffensiveReflexAgent', second='DefensiveReflexAgent', num_training=0):
-    # DEBUG: both offensive class
-    return [DefensiveReflexAgent(first_index), OffensiveReflexAgent(second_index)]
+    return [DefendAgent(first_index), OffensiveReflexAgent(second_index)]
 
 ##############
 ## AGENTS ####
@@ -1298,496 +1297,210 @@ class BaseAgent(CaptureAgent):
         sample = cells if len(cells) <= 25 else random.sample(cells, 25)
         return min(sample, key=lambda c: sum(self.dist(c, o) for o in sample))
 
+    #defending
 
-class DefensiveReflexAgent(ReflexCaptureAgent):
-    
-    """
-    Explanation: a refflex agent that keeps its side Pacman-free. Again,
-    this is to give you an idea of what a defensive agent
-    could be like.  It is not the best or only way to make
-    such an agent.
-    
-    We use BFS for planning WHEN:
-    - intercepting when invaders (plan mode: 'intercept')
-    - returning Home when carrying food enough (plan mode: 'return_home')
-    - 'patrolling' the boundary (plan mode: 'patrol')
-    
-    Uses reflex behavior for:
-    - chasing nearby invaders
-    - normal offensive actions (second attacker)
-    """
-    
-    #thresholds to decide actions
-    
-    ATTACK_TURNS = 40   #turns to be aggressive at start
-    CHASE_DISTANCE = 5     #distance to chase invaders directly
-    INTERCEPT_DISTANCE = 12    #max distance for intercept planning
-    CARRY_THRESHOLD = 3     #food to carry before returning home
-    GHOST_DANGER_DIST = 4     #distance to consider ghost dangerous
-    
-    def register_initial_state(self, game_state):
-        """
-        Initializes agent and pre-calculates boundary positions.
-        Sets up planning attributes.
-        """
-        super().register_initial_state(game_state)
-        self.boundary_positions = self._calculate_boundary(game_state)
-        self.walls = game_state.get_walls()
-        self.turns = 0
-        
-        #planning attributes
-        self.plan = []
-        self.plan_mode = None  #initializa to none
-        self.plan_target = None #initializa to none
-        
-        #coordination team attreibutes
-        self.my_zone = 'bottom' if get_agent_zone(self.index) == 'top' else 'top'
-        
-        #ts as we seen before in offensive agent
-        TeamState.agent_positions[self.index] = self.start
-        TeamState.agent_targets[self.index] = None
-    
-    def _calculate_boundary(self, game_state):
-        """
-        Calculates valid positions at the boundary.
-        """
-        walls = game_state.get_walls()
-        width = walls.width
-        height = walls.height
-        
-        if self.red:
-            boundary_x = width // 2 - 1
-        else:
-            boundary_x = width // 2
-        
-        positions = []
-        for y in range(height):
-            if not walls[boundary_x][y]:
-                positions.append((boundary_x, y))
-        
-        return positions
-        
-    def choose_action(self, game_state):
-        
-        self.turns += 1
-    
-        my_state = game_state.get_agent_state(self.index)
-        my_pos = my_state.get_position()
-        my_pos_int = (int(my_pos[0]), int(my_pos[1]))
-    
-        #update team state for coordination as we seen before
-        TeamState.agent_positions[self.index] = my_pos_int
-    
-        #detect invasors
-        enemies = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
-        invaders = [e for e in enemies if e.is_pacman and e.get_position() is not None]
-    
-        #executing the main super-plan
-        if self.plan:
-            #patrol mode if no invasor
-            if self.plan_mode == 'intercept' and len(invaders) == 0 and self.ATTACK_TURNS == self.turns:
-                self._clear_plan()
-            elif self.plan_mode != 'intercept' and len(invaders) > 0:
-                 self._clear_plan() #avoid patrol and chase
-            elif self.plan_mode == 'return_home' and not my_state.is_pacman:
-                 self._clear_plan() 
-            
-            #kkeep the plan
-            
-            if self.plan:
-                action = self.plan.pop(0)
-                if action in game_state.get_legal_actions(self.index):
-                    return action
-                self._clear_plan() # Fallback si la acción no es legal
+    def guard_spot(self, gs):
 
-    
-        
-        #priority active defense
-        if len(invaders) > 0:
-            closest_dist = min(self.get_maze_distance(my_pos, i.get_position()) for i in invaders)
-            
-            #go collapse invader
-            if closest_dist <= self.INTERCEPT_DISTANCE + 2: #more range
-                return self._handle_invaders(game_state, my_state, my_pos_int, invaders)
-    
-        #cash food for points
-        if my_state.is_pacman and my_state.num_carrying >= self.CARRY_THRESHOLD:
-            return self._plan_return_home(game_state, my_pos_int)
-    
-        #patrol and attack handling
-        if self.turns < self.ATTACK_TURNS:
-            #choose action
-            return self._choose_offensive_action(game_state, my_state, my_pos_int)
-        else:
-            #defend actively by planning a patrol
-            return self._plan_patrol(game_state, my_pos_int)
-            
-        return self._defensive_reflex_action(game_state) #worst case scenario
-        
-    
-    def _is_plan_valid(self, game_state, my_state, my_pos, invaders):
         """
-        Checks if the current plan is still valid.
+        Cell on our side, near the border, that is closest to our most exposed food.
+        Kind of like a policeman waiting in the neighborhood.
         """
-        if self.plan_mode == 'return_home':
-            return my_state.is_pacman and my_state.num_carrying > 0
-        
-        elif self.plan_mode == 'intercept':
-            #valid if there are still invaders
-            return len(invaders) > 0
-        
-        elif self.plan_mode == 'patrol':
-            #valid if no invaders and not carrying food
-            return len(invaders) == 0 and not (my_state.is_pacman and my_state.num_carrying > 0)
-        
-        return False
-    
-    def _clear_plan(self):
+
+        #we recompute it only every 15 turns, it doesnt change that fast
+        if self.guard_cache is not None and self.turn - self.guard_cache_turn < 15:
+            return self.guard_cache
+        food = self.get_food_you_are_defending(gs).as_list() + self.get_capsules_you_are_defending(gs)
+        if not food:
+            return self.start
+
+        #exposed food = the half of our food closest to the border
+        bnd = self.map.boundary
+        exposed = sorted(food, key=lambda f: min(self.dist(f, b) for b in bnd))[:max(4, len(food) // 2)]
+
+        #candidates: our cells at most 3 columns away from the border
+        cands = [c for c in self.map.cells if self.map.is_home(c)
+                 and abs(c[0] - self.map.home_x) <= 3]
+        best = min(cands, key=lambda c: sum(self.dist(c, f) for f in exposed) / len(exposed)
+                   + 0.5 * min(self.dist(c, b) for b in bnd))
+        self.guard_cache, self.guard_cache_turn = best, self.turn
+        return best
+
+    def home_dist_map(self, target):
+
         """
-        Clears the current plan.
+        Bfs from the target moving only through our side of the map.
+        Some maps have parts of our side that only connect through the enemy side,
+        so the normal maze distance is not enough to stay home.
         """
-        self.plan = []
-        self.plan_mode = None
-        self.plan_target = None
-    
-    def _handle_invaders(self, game_state, my_state, my_pos, invaders):
+        cache = self.__dict__.setdefault('_hd_cache', {})
+        if target in cache:
+            return cache[target]
+        d = {target: 0}
+        q = util.Queue()
+        q.push(target)
+        while not q.is_empty():
+            c = q.pop()
+            for n in self.map.neighbors[c]:
+                if n not in d and self.map.is_home(n):
+                    d[n] = d[c] + 1
+                    q.push(n)
+
+        #we dont want the cache to grow forever
+        if len(cache) > 400:
+            cache.clear()
+        cache[target] = d
+        return d
+
+    def predict_path(self, gs, start, steps=10):
+
         """
-        Handles invaders based on their distance. To not compute overload with BFS 
-        all the time.
+        Predicts the next steps of an invader that goes greedy for the closest food.
+        Most attackers do this, so we can wait for it on its way instead of chasing it.
         """
-        
-        #look foor the closest invader
-        closest_invader = min(invaders, 
-                              key=lambda i: self.get_maze_distance(my_pos, i.get_position()))
-        inv_pos = closest_invader.get_position()
-        inv_dist = self.get_maze_distance(my_pos, inv_pos)
-        
-        #if invader is very close, chase directly using reflex
-        if inv_dist <= self.CHASE_DISTANCE:#should be 6
-            return self._chase_invader(game_state, my_pos, inv_pos)
-        
-        #if invader is at medium distance, plan interception
-        elif inv_dist <= self.INTERCEPT_DISTANCE: #should be 10
-            return self._plan_intercept(game_state, my_pos, inv_pos)
-        
-        #invader is far soo we use reflex basic defensive behavior to not overload with BFS calls
-        return self._defensive_reflex_action(game_state)
-    
-    def _chase_invader(self, game_state, my_pos, inv_pos):
-        
+        food = set(self.get_food_you_are_defending(gs).as_list())
+        path, cur = [], start
+        while len(path) < steps and food:
+            f = min(food, key=lambda x: self.dist(cur, x))
+            food.discard(f)
+
+            #we walk the shortest path from cur to that food
+            while cur != f and len(path) < steps:
+                cur = min(self.map.neighbors[cur], key=lambda n: self.dist(n, f))
+                path.append(cur)
+        return path
+
+    def minimax_catch(self, gs, pos, inv):
+
         """
-        Chases an invader direectly using reflex evaluation.
-        No BFS planning here, just greedy chase to save time.
+        Minimax with alpha-beta when an invader is close.
+        We (max) want to catch it, the invader (min) wants to run back across the border.
+        We never leave our side.
         """
-        actions = game_state.get_legal_actions(self.index)
-        actions = [a for a in actions if a != Directions.STOP]
-        
-        if not actions:
+        is_home = self.map.is_home
+        nb = self.map.neighbors
+        exits = self.map.boundary
+
+        #a state is (our position, invader position)
+        def successors(state, maximizing):
+            me, p = state
+            if maximizing:
+                moves = [n for n in nb[me] if is_home(n)] + [me]
+                return [(n, (n, p)) for n in moves]
+            return [(n, (me, n)) for n in nb[p] + [p]]
+
+        def terminal(state):
+            me, p = state
+            if me == p:
+                return 1000     #we caught it
+            if not is_home(p):
+                return -300     #it escaped to its side
+            return None
+
+        def evaluate(state):
+
+            #closer to the invader is better, and the invader far from the border is better
+            me, p = state
+            de = min(self.dist(p, b) for b in exits)
+            return -3 * self.dist(me, p) + de
+
+        _, move = alpha_beta((pos, inv), 6, float('-inf'), float('inf'),
+                             True, successors, evaluate, terminal)
+        if move is None or move == pos:
+            return None
+        return self.action_to(gs, move)
+
+    def defend_action(self, gs, stay_home=True):
+
+        """
+        Main defensive decision.
+        Priority: catch a close invader (minimax) > intercept a visible invader >
+        go where food was just eaten > go where we think the invader is > guard spot.
+        """
+        pos = self.my_pos(gs)
+        my_state = gs.get_agent_state(self.index)
+        scared = my_state.scared_timer > 0
+        legal = [a for a in gs.get_legal_actions(self.index) if a != Directions.STOP]
+
+        #invaders = enemies that are pacman on our side
+        invaders = [e for e in self.enemies if gs.get_agent_state(e).is_pacman]
+        visible = [e for e in invaders if gs.get_agent_state(e).get_position() is not None]
+
+        #invader very close and we are not scared -> adversarial search
+        if visible and not scared:
+            e = min(visible, key=lambda e: self.dist(pos, self.belief_center(e)))
+            ip = self.belief_center(e)
+            if self.dist(pos, ip) <= 4:
+                a = self.minimax_catch(gs, pos, ip)
+                if a is not None:
+                    return a
+
+        #choose the target position
+        target = None
+        inv_pos = None
+        if visible:
+            e = min(visible, key=lambda e: self.dist(pos, self.belief_center(e)))
+            inv_pos = self.belief_center(e)
+            target = inv_pos
+
+            #chasing from behind doesnt work (same speed), so we go to the first
+            #cell of its predicted path where we arrive before or at the same time
+            if not scared and self.dist(pos, inv_pos) > 2:
+                for k, c in enumerate(self.predict_path(gs, inv_pos), start=1):
+                    if self.dist(pos, c) <= k:
+                        target = c
+                        break
+        elif self.last_eaten is not None and self.turn - self.last_eaten_turn <= 6:
+            #we dont see it but some food was eaten recently
+            target = self.last_eaten
+        elif invaders:
+            #we dont see it, we use the most precise belief
+            e = min(invaders, key=lambda e: len(self.mem.beliefs.get(e, ())))
+            target = self.belief_center(e)
+        if target is None:
+            target = self.guard_spot(gs)
+
+        #if we can, we move only through our side of the map
+        hd = self.home_dist_map(target) if (stay_home and self.map.is_home(target)) else None
+        use_home = hd is not None and pos in hd
+
+        #we score every action, lower is better
+        options = []
+        for a in legal:
+
+            #cell where we end up with this action (framework helper)
+            x, y = Actions.get_successor(pos, a)
+            npos = (int(x), int(y))
+            if use_home:
+                if npos not in hd:
+                    continue
+                d = hd[npos]
+            else:
+                d = self.dist(npos, target)
+
+            #if we are scared we cant eat it: we follow it keeping a distance of 2
+            if scared and inv_pos is not None:
+                di = self.dist(npos, inv_pos)
+                score = abs(di - 2) + (100 if di <= 1 else 0)
+            else:
+                score = d
+            options.append((score, random.random(), a))  #random to break ties
+        if not options:
             return Directions.STOP
-        
-        #choose action that minimizes distance to invader
-        best_action = None
-        best_dist = float('inf')
-        
-        for action in actions:
-            successor = self.get_successor(game_state, action)
-            new_pos = successor.get_agent_state(self.index).get_position()
-            dist = self.get_maze_distance(new_pos, inv_pos)
-            
-            if dist < best_dist:
-                best_dist = dist
-                best_action = action
-        
-        return best_action if best_action else random.choice(actions)
-        
-    
-    #kind of like a policeman in the neirborhood
-    def _plan_patrol(self, game_state, my_pos):
-        """
-        Plans a path to patrol the boundary positions around center map.
-        The target alternaates between the top and bottom of the boundary of the teams.
-        """
-        
-        #wee choose a patrol target (e.g., top/bottom boundary positions)
-        boundary_pos = self._calculate_boundary(game_state)
-        
-        if not boundary_pos:
-            return self._fallback_action(game_state)
+        options.sort()
 
-        #we get top/bottom boundary points
-        top_boundary = max(boundary_pos, key=lambda p: p[1])
-        bottom_boundary = min(boundary_pos, key=lambda p: p[1])
+        #already at the guard spot and nobody around -> wait there
+        if inv_pos is None and pos == target:
+            return Directions.STOP
+        return options[0][2]
 
-        #alternate targets
-        if self.plan_target == top_boundary:
-            target = bottom_boundary
-        else:
-            target = top_boundary
-            
-        if my_pos == target: # If already at target, switch to the other
-             target = bottom_boundary if target == top_boundary else top_boundary
-        
-        #we use bfs
-        path = bfs_to_goal(my_pos, target, self.walls)
-        
-        if path:
-            self.plan = path
-            self.plan_mode = 'patrol'
-            self.plan_target = target
-            return self.plan.pop(0)
-        
-        return self._defensive_reflex_action(game_state) # Fallback to reflex
-    
-    def _plan_intercept(self, game_state, my_pos, inv_pos):
-        
-        """
-        Plans an interception path to cut off the invader.
-        Uses BFS once.
-        """
-        inv_pos_int = (int(inv_pos[0]), int(inv_pos[1]))
-        
-        # find best intercept point: boundary position closest to invader
-        if self.boundary_positions:
-            intercept_target = min(self.boundary_positions,
-                                   key=lambda b: self.get_maze_distance(b, inv_pos_int))
-        else:
-            intercept_target = inv_pos_int
-        
-        #compute path using bfs (only once)
-        path = bfs_to_goal(my_pos, intercept_target, self.walls)
-        
-        if path:
-            self.plan = path
-            self.plan_mode = 'intercept'
-            self.plan_target = intercept_target
-            return self.plan.pop(0)
-        
-        #fallback to direct chase behavioor
-        return self._chase_invader(game_state, my_pos, inv_pos)
-    
-    def _plan_return_home(self, game_state, my_pos):
-        
-        """
-        Another inteligent action designed that,
-        Plans a path to return home and deposit food.
-        """
-        target = min(self.boundary_positions,
-                     key=lambda b: self.get_maze_distance(my_pos, b))
-        
-        #get danger positions to dont lose score points oncee turning home
-        
-        #getting ghosts pos
-        enemies = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
-        ghosts = [e for e in enemies if not e.is_pacman and e.get_position() is not None]
-        
-        
-        dangerous_ghosts = [g for g in ghosts if g.scared_timer <= 2]
-        danger_positions = self._get_danger_positions(dangerous_ghosts)
-        
-        #bfs our way out
-        path = bfs_to_goal_avoiding(my_pos, target, self.walls, danger_positions)
-        
-        if path:
-            self.plan = path
-            self.plan_mode = 'return_home'
-            self.plan_target = target
-            return self.plan.pop(0)
-        
-        return self._fallback_action(game_state)
-    
-    def _choose_offensive_action(self, game_state, my_state, my_pos):
-        
-        """
-        Offensive behavior when there are no invaders.
-        Uses reflex evaluation to chase food.
-        """
-        #check for dangerous ghosts as we seen before
-        
-        enemies = [game_state.get_agent_state(i) for i in self.get_opponents(game_state)]
-        ghosts = [e for e in enemies if not e.is_pacman and e.get_position() is not None]
-        
-        dangerous_ghosts = [g for g in ghosts if g.scared_timer <= 2]
-        
-        #if dangerous ghost nearby while pacman, be cautious
-        if my_state.is_pacman and dangerous_ghosts:
-            min_ghost_dist = min(self.get_maze_distance(my_pos, g.get_position()) 
-                                 for g in dangerous_ghosts)
-            if min_ghost_dist <= 3:
-                return self._plan_return_home(game_state, my_pos)
-        
-        #use offensive reflex behavior wiht lower cost 
-        return self._offensive_reflex_action(game_state)
-    
-    def _offensive_reflex_action(self, game_state):
-        
-        """
-        Uses offensive features/weights for action selection.
-        """
-        actions = game_state.get_legal_actions(self.index)
-        values = [self._evaluate_offensive(game_state, a) for a in actions]
-        
-        max_value = max(values)
-        best_actions = [a for a, v in zip(actions, values) if v == max_value]
-        
-        return random.choice(best_actions)
-    
-    def _evaluate_offensive(self, game_state, action):
-        
-        """
-        Evaluates action using offensive features.
-        """
-        features = self._get_offensive_features(game_state, action)
-        weights = self._get_offensive_weights(game_state, action)
-        return features * weights
-    
-    def _get_offensive_features(self, game_state, action):
-        
-        """
-        Features for offensive behavior.
-        """
-        features = util.Counter()
-        successor = self.get_successor(game_state, action)
-        
-        my_state = successor.get_agent_state(self.index)
-        my_pos = my_state.get_position()
-        
-        food_list = self.get_food(successor).as_list()
-        features['successor_score'] = -len(food_list)
-        
-        if action == Directions.STOP:
-            features['stop'] = 1.0
-        
-        current_direction = game_state.get_agent_state(self.index).configuration.direction
-        if action == Directions.REVERSE.get(current_direction, None):
-            features['reverse'] = 1.0
-        
-        if action == current_direction and action != Directions.STOP:
-            features['forward'] = 1.0
-        
-        if len(food_list) > 0:
-            min_food_dist = min(self.get_maze_distance(my_pos, food) for food in food_list)
-            features['distance_to_food'] = float(min_food_dist)
-        
-        #dangerous ghosts or enemies positions
-        enemies = [successor.get_agent_state(i) for i in self.get_opponents(successor)]
-        enemy_ghosts = [e for e in enemies if not e.is_pacman and e.get_position() is not None]
-        dangerous_ghosts = [g for g in enemy_ghosts if g.scared_timer == 0]
-        
-        if my_state.is_pacman and len(dangerous_ghosts) > 0:
-            dists = [self.get_maze_distance(my_pos, g.get_position()) for g in dangerous_ghosts]
-            min_ghost_dist = min(dists)
-            if min_ghost_dist <= 5:
-                features['dangerous_ghost'] = 1.0 / (min_ghost_dist + 0.1)
-        
-        return features
-        
-    def _get_offensive_weights(self, game_state, action):
-        
-        #weights for offensive behavior
-        return {
-            'successor_score': 70.0,    #less than main agent
-            'distance_to_food': -6.0,   #incentive food eating
-            'dangerous_ghost': -180.0,
-            'stop': -15.0,
-            'forward': 4.0,
-            'reverse': -6.0,
-        }
 
-    
-    def _defensive_reflex_action(self, game_state):
-        """
-        Uses defensive features/weights for action selection.
-        """
-        actions = game_state.get_legal_actions(self.index)
-        values = [self.evaluate(game_state, a) for a in actions]
-        
-        max_value = max(values)
-        best_actions = [a for a, v in zip(actions, values) if v == max_value]
-        
-        return random.choice(best_actions)
-    
-    def _get_danger_positions(self, dangerous_ghosts):
-        """
-        Returns set of positions to avoid.
-        """
-        danger = set()
-        for g in dangerous_ghosts:
-            gpos = g.get_position()
-            gpos = (int(gpos[0]), int(gpos[1]))
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    danger.add((gpos[0] + dx, gpos[1] + dy))
-        return danger
-    
-    def _get_dist_to_boundary(self, pos):
-        """
-        Calculates distance to closest boundary position.
-        """
-        if not self.boundary_positions:
-            return self.get_maze_distance(pos, self.start)
-        return min(self.get_maze_distance(pos, bp) for bp in self.boundary_positions)
-    
-    def _fallback_action(self, game_state):
-        """
-        Fallback action when ourr plan has faailed (something
-        else has happened in the game heuristics).
-        """
-        actions = game_state.get_legal_actions(self.index)
-        actions = [a for a in actions if a != Directions.STOP]
-        return random.choice(actions) if actions else Directions.STOP
-    
-    def get_features(self, game_state, action):
-        
-        """
-        Features for defensive evaluation.
-        """
-        features = util.Counter()
-        successor = self.get_successor(game_state, action)
-        
-        my_state = successor.get_agent_state(self.index)
-        my_pos = my_state.get_position()
-        
-        #being on defense is good
-        features['on_defense'] = 1
-        if my_state.is_pacman:
-            features['on_defense'] = 0
-        
-        #detect invaders
-        enemies = [successor.get_agent_state(i) for i in self.get_opponents(successor)]
-        invaders = [a for a in enemies if a.is_pacman and a.get_position() is not None]
-        features['num_invaders'] = len(invaders)
-        
-        if len(invaders) > 0:
-            dists = [self.get_maze_distance(my_pos, a.get_position()) for a in invaders]
-            features['invader_distance'] = min(dists)
-        
-        #don't stop, little penalitzation for stopping
-        if action == Directions.STOP:
-            features['stop'] = 1
-        
-        #penalize reverse, to avoid getting back from the same path
-        rev = Directions.REVERSE[game_state.get_agent_state(self.index).configuration.direction]
-        if action == rev:
-            features['reverse'] = 1
-        
-        return features
-    
-    def get_weights(self, game_state, action):
-        
-        my_state = game_state.get_agent_state(self.index)
-        
-        if self.turns < self.ATTACK_TURNS:
-            on_defense_weight = 0
-        else:
-            on_defense_weight = 35
-        
-        """
-        Weights for defensive evaluation.
-        """
-        return {
-            'num_invaders': -1000,
-            'on_defense': on_defense_weight,
-            'invader_distance': -12,
-            'stop': -1000,
-            'reverse': -40
-        }
+class DefendAgent(BaseAgent):
+
+    """
+    Defensive agent. It always stays on our side (see defend_action in BaseAgent).
+    """
+
+    def choose_action(self, gs):
+        self.turn += 1
+        self.update_beliefs(gs)
+        return self.defend_action(gs)
