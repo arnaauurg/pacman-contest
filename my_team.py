@@ -401,6 +401,88 @@ def bfs_to_goal_avoiding(start, goal, walls, danger_positions):
     return bfs_to_goal(start, goal, walls)
 
 
+####################
+## MAP ANALYSIS ####
+####################
+
+class MapInfo:
+
+    """
+    Static information about the map. We compute it once at the start of the game
+    so we dont waste time on it every turn.
+    """
+
+    def __init__(self, game_state, red):
+        walls = game_state.get_walls()
+        self.walls = walls
+        self.width, self.height = walls.width, walls.height
+
+        #all free cells and their free neighbours, with the framework helpers walls.as_list and
+        #Actions.get_legal_neighbors (computed only once because we use them all the time)
+        self.cells = walls.as_list(False)
+        cell_set = set(self.cells)
+        self.neighbors = {c: Actions.get_legal_neighbors(c, walls) for c in self.cells}
+
+        #our side of the map depends on the team color
+        mid = self.width // 2
+        self.red = red
+        if red:
+            self.home_x = mid - 1
+            self.is_home = lambda c: c[0] < mid
+        else:
+            self.home_x = mid
+            self.is_home = lambda c: c[0] >= mid
+
+        #boundary = our last column, but only cells that really connect to the enemy side
+        self.boundary = [(self.home_x, y) for y in range(self.height) if not walls[self.home_x][y]]
+        enemy_x = mid if red else mid - 1
+        self.boundary = [b for b in self.boundary if (enemy_x, b[1]) in cell_set] or self.boundary
+
+        #dead ends: we keep removing cells with only one exit (degree <= 1).
+        #what gets removed are corridors with no way out, where a ghost can trap us
+        degree = {c: len(self.neighbors[c]) for c in self.cells}
+        removed = set()
+        q = util.Queue()
+        for c in self.cells:
+            if degree[c] <= 1:
+                q.push(c)
+        while not q.is_empty():
+            c = q.pop()
+            if c in removed:
+                continue
+            removed.add(c)
+            for n in self.neighbors[c]:
+                if n not in removed:
+                    degree[n] -= 1
+                    if degree[n] <= 1:
+                        q.push(n)
+
+        #for every dead end cell we save how deep it is and where the "mouth" of the corridor is.
+        #cells that are not in a dead end have depth 0 and they are their own exit
+        self.depth = {c: 0 for c in self.cells}
+        self.exit = {c: c for c in self.cells}
+        if len(removed) < len(self.cells):
+
+            #bfs starting from all the mouths at the same time, going inside the corridors
+            q = util.Queue()
+            for c in self.cells:
+                if c not in removed:
+                    for n in self.neighbors[c]:
+                        if n in removed and self.exit[n] == n and self.depth[n] == 0:
+                            self.depth[n] = 1
+                            self.exit[n] = c
+                            q.push(n)
+            seen = set(q.list)
+            while not q.is_empty():
+                c = q.pop()
+                for n in self.neighbors[c]:
+                    if n in removed and n not in seen:
+                        seen.add(n)
+                        self.depth[n] = self.depth[c] + 1
+                        self.exit[n] = self.exit[c]
+                        q.push(n)
+
+
 #######################
 ## TEAM TACTICS #######
 #######################
