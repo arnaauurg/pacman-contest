@@ -289,11 +289,11 @@ def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, term
 #####################
 
 def create_team(first_index, second_index, is_red,
-                first='AttackAgent', second='DefendAgent', num_training=0):
+                first='FlexAgent', second='FlexAgent', num_training=0):
 
     """
     This function should return a list of two agents that will form the
-    team. One agent attacks and the other one defends.
+    team. Both agents are the same: they choose to attack or defend every turn.
     """
     return [eval(first)(first_index), eval(second)(second_index)]
 
@@ -395,6 +395,7 @@ class TeamMemory:
         self.beliefs = {}       #{enemy_index: set of cells where the enemy can be}
         self.last_turn = -1     #timeleft when the memory was created
         self.targets = {}       #{agent_index: target position}, to not chase the same food
+        self.defender = None    #index of the agent that is defending now (None = both attack)
 
 
 _MEMORY = {}
@@ -886,12 +887,15 @@ class AttackAgent(BaseAgent):
         return gd(mouth) <= t + d + self.SAFETY
 
     def choose_action(self, gs):
+        self.turn += 1
+        self.update_beliefs(gs)
+        return self.attack_action(gs)
+
+    def attack_action(self, gs):
 
         """
         Main offensive decision function.
         """
-        self.turn += 1
-        self.update_beliefs(gs)
         pos = self.my_pos(gs)
         st = gs.get_agent_state(self.index)
         carrying = st.num_carrying
@@ -910,10 +914,6 @@ class AttackAgent(BaseAgent):
         home_cells = [b for b in self.map.boundary if b in dist]
         true_home = min(self.dist(pos, b) for b in self.map.boundary)
         score = self.get_score(gs)
-
-        #end of the game and we are winning: stay home and defend the lead
-        if st.is_pacman is False and score > 0 and moves_left < 40:
-            return self.defend_action(gs)
 
         #invader close to us while we are still on our side: we eat it first
         if not st.is_pacman and st.scared_timer == 0:
@@ -1110,13 +1110,82 @@ class AttackAgent(BaseAgent):
         return best
 
 
-class DefendAgent(BaseAgent):
+class FlexAgent(AttackAgent):
 
     """
-    Defensive agent. It always stays on our side (see defend_action in BaseAgent).
+    Polymorphic agent: both agents of the team are FlexAgents and every turn
+    each one chooses its role:
+    - nobody invading us: both attack (the more food we bring, the better)
+    - someone invading us: the agent closest to the invader defends (hunts or
+      blocks it) and the other one keeps farming points
+    - end of the game and we are winning: we go home to defend the lead
+    When an agent dies and respawns, the distances change and so do the roles.
     """
+
+    SWITCH_MARGIN = 3   #the other agent must be this much better to swap roles (avoid flip-flopping)
 
     def choose_action(self, gs):
         self.turn += 1
         self.update_beliefs(gs)
-        return self.defend_action(gs)
+        if self.choose_role(gs) == 'defend':
+            return self.defend_action(gs)
+        return self.attack_action(gs)
+
+    def choose_role(self, gs):
+
+        """
+        Returns 'attack' or 'defend' for this agent.
+        """
+        st = gs.get_agent_state(self.index)
+
+        #end of the game and we are winning: stay home and defend the lead
+        if not st.is_pacman and self.get_score(gs) > 0 and self.moves_left(gs) < 40:
+            return 'defend'
+
+        #nobody invading: both attack
+        invaders = [e for e in self.enemies if gs.get_agent_state(e).is_pacman]
+        if not invaders:
+            self.mem.defender = None
+            return 'attack'
+
+        #someone invading: only one of us defends
+        return 'defend' if self.pick_defender(gs, invaders) == self.index else 'attack'
+
+    def defend_cost(self, gs, i, inv_cells):
+
+        """
+        How bad it is that agent i becomes the defender (lower is better).
+        """
+        p = gs.get_agent_position(i)
+        p = (int(p[0]), int(p[1]))
+        st = gs.get_agent_state(i)
+
+        #closest to the invader hunts it
+        cost = min(self.dist(p, c) for c in inv_cells)
+
+        #if it carries food, better to let it go home and cash it
+        cost += 2 * st.num_carrying
+
+        #a scared agent cant eat the invader
+        if st.scared_timer > 0:
+            cost += 15
+        return cost
+
+    def pick_defender(self, gs, invaders):
+
+        """
+        Chooses which agent of the team defends. Both agents compute the same thing,
+        and the choice is saved in the team memory.
+        """
+        inv_cells = [c for c in (self.belief_center(e) for e in invaders) if c is not None]
+        if not inv_cells:
+            return self.mem.defender
+        costs = {i: self.defend_cost(gs, i, inv_cells) for i in self.team}
+        best = min(self.team, key=lambda i: (costs[i], i))
+
+        #keep the current defender unless the other one is clearly better
+        cur = self.mem.defender
+        if cur in costs and cur != best and costs[cur] <= costs[best] + self.SWITCH_MARGIN:
+            best = cur
+        self.mem.defender = best
+        return best
