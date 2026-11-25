@@ -658,12 +658,17 @@ class BaseAgent(CaptureAgent):
                 path.append(cur)
         return path
 
+    CATCH_MAX_DIST = 12   #use minimax against visible invaders up to this distance
+    CATCH_DEPTH = 6        #plies when the invader is close
+    CATCH_DEPTH_FAR = 4     #plies when it is further (to save time)
+
     def minimax_catch(self, gs, pos, inv):
 
         """
-        Minimax with alpha-beta when an invader is close.
+        Minimax with alpha-beta when we see an invader.
         We (max) want to catch it, the invader (min) wants to run back across the border.
-        We never leave our side.
+        At the depth limit we use territory control: how much of our food and how many
+        exits we reach before the invader. We never leave our side.
         """
         is_home = self.map.is_home
         nb = self.map.neighbors
@@ -685,17 +690,23 @@ class BaseAgent(CaptureAgent):
                 return -300     #it escaped to its side
             return None
 
+        #territory control: food we reach before the invader is food it cant take safely,
+        #and border cells we reach first are exits we keep closed
+        food = self.get_food_you_are_defending(gs).as_list() + self.get_capsules_you_are_defending(gs)
+
         def evaluate(state):
-
-            #closer to the invader is better, and the invader far from the border is better
             me, p = state
-            de = min(self.dist(p, b) for b in exits)
-            return -3 * self.dist(me, p) + de
+            ctrl = sum(1 for f in food if self.dist(me, f) < self.dist(p, f))
+            cut = sum(1 for b in exits if self.dist(me, b) < self.dist(p, b))
+            return 10 * ctrl + 25 * cut / max(1, len(exits)) - self.dist(me, p)
 
-        _, move = alpha_beta((pos, inv), 6, float('-inf'), float('inf'),
+        depth = self.CATCH_DEPTH if self.dist(pos, inv) <= 4 else self.CATCH_DEPTH_FAR
+        _, move = alpha_beta((pos, inv), depth, float('-inf'), float('inf'),
                              True, successors, evaluate, terminal)
-        if move is None or move == pos:
+        if move is None:
             return None
+        if move == pos:
+            return Directions.STOP
         return self.action_to(gs, move)
 
     def defend_action(self, gs, stay_home=True):
@@ -718,7 +729,7 @@ class BaseAgent(CaptureAgent):
         if visible and not scared:
             e = min(visible, key=lambda e: self.dist(pos, self.belief_center(e)))
             ip = self.belief_center(e)
-            if self.dist(pos, ip) <= 4:
+            if self.dist(pos, ip) <= self.CATCH_MAX_DIST:
                 a = self.minimax_catch(gs, pos, ip)
                 if a is not None:
                     return a
@@ -794,7 +805,7 @@ class AttackAgent(BaseAgent):
     4. if there is no safe path at all, minimax to escape from the ghost
     """
 
-    SAFETY = 1          #extra margin (in moves) we want against ghosts
+    SAFETY = 1          #extra margin (in moves) we want against ghosts (-1 when carrying nothing)
     MINIMAX_DEPTH = 6   #plies for the escape minimax (3 moves each)
 
     def dangerous_ghosts(self, gs, pos):
@@ -885,6 +896,10 @@ class AttackAgent(BaseAgent):
         st = gs.get_agent_state(self.index)
         carrying = st.num_carrying
         ghosts = self.dangerous_ghosts(gs, pos)
+
+        #with no food on us dying only costs the walk back, so we take more risks
+        #(we accept that the ghost could get one step closer than normally)
+        self.SAFETY = -1 if carrying == 0 else 1
 
         #1. safe region with bfs
         dist, parent, gd = self.safe_search(gs, pos, ghosts)
