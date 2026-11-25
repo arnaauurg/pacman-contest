@@ -13,6 +13,9 @@ from contest.capture_agents import CaptureAgent
 from contest.game import Directions, Actions
 from contest.util import nearest_point
 
+#game constants (same values as in capture.py)
+SIGHT_RANGE = 5     #we see exact enemy positions only within this manhattan distance
+
 ##########################
 ## SEARCH ALGORITHMS #####
 ##########################
@@ -527,6 +530,22 @@ def get_agent_zone(index):
         return 'top'
     else:
         return 'bottom'
+
+
+class TeamMemory:
+
+    """
+    Shared state between team agents for coordination.
+    There is one per team color and it is reset every game.
+    """
+
+    def __init__(self):
+        self.beliefs = {}       #{enemy_index: set of cells where the enemy can be}
+        self.last_turn = -1     #timeleft when the memory was created
+        self.targets = {}       #{agent_index: target position}, to not chase the same food
+
+
+_MEMORY = {}
 
 
 #####################
@@ -1095,6 +1114,189 @@ class OffensiveReflexAgent(ReflexCaptureAgent):
             weights['num_carrying'] = 0.0
     
         return weights
+
+
+class BaseAgent(CaptureAgent):
+
+    """
+    Common code for both agents: enemy tracking and defending.
+    """
+
+    def __init__(self, index, time_for_computing=.1):
+        super().__init__(index, time_for_computing)
+
+    def register_initial_state(self, game_state):
+
+        """
+        Initializes agent and pre-calculates the map info.
+        """
+        CaptureAgent.register_initial_state(self, game_state)
+        self.start = game_state.get_agent_position(self.index)
+        self.map = MapInfo(game_state, self.red)
+
+        #new game -> new team memory (timeleft only goes down during a game)
+        key = self.red
+        mem = _MEMORY.get(key)
+        if mem is None or mem.last_turn < game_state.data.timeleft:
+            mem = TeamMemory()
+            _MEMORY[key] = mem
+
+            #at the start we know exactly where the enemies are
+            for e in self.get_opponents(game_state):
+                mem.beliefs[e] = {game_state.get_initial_agent_position(e)}
+            mem.last_turn = game_state.data.timeleft + 1
+        self.mem = mem
+
+        self.enemies = self.get_opponents(game_state)
+        self.team = self.get_team(game_state)
+        self.total_food = len(self.get_food(game_state).as_list())
+
+        #to detect which of our food gets eaten every turn
+        self.prev_def_food = set(self.get_food_you_are_defending(game_state).as_list())
+        self.last_eaten = None
+        self.last_eaten_turn = -999
+
+        self.turn = 0
+        self.guard_cache = None
+        self.guard_cache_turn = -999
+
+    #utilities
+
+    def dist(self, a, b):
+        return self.get_maze_distance(a, b)
+
+    def my_pos(self, gs):
+        p = gs.get_agent_position(self.index)
+        return (int(p[0]), int(p[1]))
+
+    def moves_left(self, gs):
+
+        #timeleft counts the moves of the 4 agents, so we have 1/4 of them
+        return gs.data.timeleft // 4
+
+    def action_to(self, gs, nxt):
+
+        """
+        Returns the action that moves us from our position to the neighbour cell nxt.
+        """
+        pos = self.my_pos(gs)
+        for a in gs.get_legal_actions(self.index):
+            dx, dy = Actions.direction_to_vector(a)
+            if (int(pos[0] + dx), int(pos[1] + dy)) == nxt:
+                return a
+        return None
+
+    #enemy tracking
+
+    def update_beliefs(self, gs):
+
+        """
+        We keep for every enemy the set of cells where it could be.
+        Every turn: the set grows one step (the enemy moved) and then we remove
+        the cells that dont match what we observe (noisy distance, sight range,
+        pacman or ghost, food that disappeared).
+        """
+        mem = self.mem
+        my_pos = self.my_pos(gs)
+        team_pos = [gs.get_agent_position(i) for i in self.team]
+        noisy = gs.get_agent_distances()
+        prev = self.get_previous_observation()
+
+        #food we defend that disappeared since our last turn -> an invader was there
+        cur_food = set(self.get_food_you_are_defending(gs).as_list())
+        eaten = self.prev_def_food - cur_food
+        self.prev_def_food = cur_food
+        if eaten:
+            self.last_eaten = min(eaten, key=lambda f: self.dist(my_pos, f))
+            self.last_eaten_turn = self.turn
+
+        for e in self.enemies:
+            st = gs.get_agent_state(e)
+            pos = st.get_position()
+
+            #we see it, so we know exactly where it is
+            if pos is not None:
+                mem.beliefs[e] = {(int(pos[0]), int(pos[1]))}
+                continue
+
+            old = mem.beliefs.get(e) or set(self.map.cells)
+
+            #it was next to one of us last turn and now we dont see it -> probably eaten,
+            #so it went back to its start position
+            if prev is not None:
+                ppos = prev.get_agent_position(e)
+                if ppos is not None and any(self.dist(ppos, (int(t[0]), int(t[1]))) <= 1 for t in team_pos):
+                    old = {gs.get_initial_agent_position(e)}
+
+            #only the enemy that played just before us has moved since our teammate's turn
+            if e == (self.index - 1) % gs.get_num_agents():
+                new = set()
+                for c in old:
+                    new.add(c)
+                    new.update(self.map.neighbors[c])
+            else:
+                new = set(old)
+
+            #remove the cells that dont match the observation
+            is_pac = st.is_pacman
+            filt = set()
+            for c in new:
+
+                #if it is a pacman it is on our side, if it is a ghost on its side
+                if self.map.is_home(c) != is_pac:
+                    continue
+
+                #if it was that close we would see it
+                if any(util.manhattan_distance(c, t) <= SIGHT_RANGE for t in team_pos):
+                    continue
+
+                #the real distance must be possible for the noisy reading
+                #(framework get_distance_prob gives 0 when it is not)
+                if noisy is not None:
+                    md = util.manhattan_distance(c, my_pos)
+                    if gs.get_distance_prob(md, noisy[e]) == 0:
+                        continue
+                filt.add(c)
+
+            #food eaten by an invisible invader tells us exactly where it is
+            if is_pac and eaten:
+                cand = [f for f in eaten if f in filt or f in new]
+                if cand:
+                    filt = {cand[0]}
+
+            #nothing matches (we made a wrong assumption): start again from the noisy reading only
+            if not filt:
+                filt = set()
+                for c in self.map.cells:
+                    if self.map.is_home(c) != is_pac:
+                        continue
+                    if any(util.manhattan_distance(c, t) <= SIGHT_RANGE for t in team_pos):
+                        continue
+                    if noisy is not None:
+                        md = util.manhattan_distance(c, my_pos)
+                        if gs.get_distance_prob(md, noisy[e]) == 0:
+                            continue
+                    filt.add(c)
+                if not filt:
+                    filt = {gs.get_initial_agent_position(e)}
+            mem.beliefs[e] = filt
+
+    def belief_center(self, e, ref=None):
+
+        """
+        Returns one cell that represents where enemy e probably is.
+        """
+        cells = list(self.mem.beliefs.get(e, ()))
+        if not cells:
+            return None
+        if len(cells) == 1:
+            return cells[0]
+        if ref is not None:
+            return min(cells, key=lambda c: self.dist(ref, c))
+
+        #the cell in the "middle" of the possible cells (we use a sample to save time)
+        sample = cells if len(cells) <= 25 else random.sample(cells, 25)
+        return min(sample, key=lambda c: sum(self.dist(c, o) for o in sample))
 
 
 class DefensiveReflexAgent(ReflexCaptureAgent):
