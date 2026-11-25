@@ -21,11 +21,9 @@ from contest.util import nearest_point
 #all of them work over a search problem with the same interface as in the course
 #(get_start_state, is_goal_state, get_successors)
 
-#the goal of this refactor is to move from hardcoded agents (one always attacks, the other
+#the goal of this changes in general is to movee from hardcoded agents (one always attacks, the other
 #always defends, with fixed plans like patrolling top/bottom) to more flexible agents that
-#decide every turn what to do. For that the search has to be generic: GridPathProblem lets
-#us ask for a path from anywhere to any set of goals, only through the cells we allow
-#(e.g. cells that are safe from ghosts) and with our own step costs
+#decide every turn what to do.
 
 class GridPathProblem:
 
@@ -86,7 +84,7 @@ def depth_first_search(problem):
     print("Start's successors:", problem.get_successors(problem.get_start_state()))
     """
     
-    # track all visited states to avoid repeated points or doing circles
+    #track all visited states to avoid repeated points or doing circles
     explored_state = set()
     
     # use stack for lifo order
@@ -117,11 +115,6 @@ def depth_first_search(problem):
             for child in successors:
                 [state, action, cost_state] = child
                 
-                # skip if already explored
-                #before we also checked "frontier_dfs.contains(child)" but util.Stack has no
-                #contains method, so dfs crashed with an error if it was ever called.
-                #checking explored is enough: if a state is pushed twice, the second time
-                #we pop it, it is already explored and we skip it (the explored check after pop)
                 if (not state in explored_state):
                     
                     # we add new action to current path
@@ -166,13 +159,9 @@ def breadth_first_search(problem):
             for child in successors: 
                 [state, action, cost_state] = child
                 
-                # add only new unexplored states
+                # add only new unexplored states!!
                 #before we also checked "not child in frontier_bfs.list" to not repeat states,
-                #but it never worked: child is a tuple (state, action, cost) and the frontier
-                #keeps lists [state, path, cost], a tuple is never equal to a list, so the check
-                #was always true. And "in" goes through the whole frontier for every child,
-                #that is O(n) each time, the expensive part we saw.
-                #repeated states in the queue are harmless: when popped they are already
+                #reepeated states in the queue are harmless: when popped they are already
                 #explored and skipped, and bfs still returns the shortest path
                 if (not state in explored_bfs):
                     new_path = path + [action]
