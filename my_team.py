@@ -808,6 +808,17 @@ class AttackAgent(BaseAgent):
 
     SAFETY = 1          #extra margin (in moves) we want against ghosts (-1 when carrying nothing)
     MINIMAX_DEPTH = 6   #plies for the escape minimax (3 moves each)
+    LOOP_TURNS = 6      #turns moving between only 2 cells that we consider a loop
+    COMMIT_TURNS = 12   #how long a forced attack lasts once we break a loop
+    ENTRY_TURNS = 10    #turns we keep the same entry point while repositioning
+
+    def register_initial_state(self, game_state):
+        super().register_initial_state(game_state)
+        self.history = []           #our last positions, to detect loops
+        self.prev_target = None     #last food we went for (to not change target every turn)
+        self.commit_left = 0        #turns left of a forced attack
+        self.entry = None           #entry point chosen while repositioning
+        self.entry_turn = -999
 
     def dangerous_ghosts(self, gs, pos):
 
@@ -891,6 +902,13 @@ class AttackAgent(BaseAgent):
         self.update_beliefs(gs)
         return self.attack_action(gs)
 
+    def in_loop(self):
+
+        """
+        True if in the last turns we only moved between 2 cells (forward, back, forward...).
+        """
+        return len(self.history) == self.LOOP_TURNS and len(set(self.history)) <= 2
+
     def attack_action(self, gs):
 
         """
@@ -907,6 +925,13 @@ class AttackAgent(BaseAgent):
 
         #1. safe region with bfs
         dist, parent, gd = self.safe_search(gs, pos, ghosts)
+
+        #loop breaker: if we are going forward and back between 2 cells with no food on us,
+        #we stop being so careful for a few turns and go for the least defended food
+        if carrying == 0 and (self.commit_left > 0 or self.in_loop()):
+            a = self.forced_attack(gs, pos, st, ghosts, gd)
+            if a is not None:
+                return a
 
         food = self.get_food(gs).as_list()
         caps = self.get_capsules(gs)
@@ -990,9 +1015,16 @@ class AttackAgent(BaseAgent):
                     if mate_t and len(sf) > 1:
                         sf = [x for x in sf if all(self.dist(x[1], m) > 3 for m in mate_t)] or sf
                     target = min(sf)[1]
+
+                    #keep the previous food if it is still safe and not much further,
+                    #so we dont change our mind every turn
+                    prev = [x for x in sf if x[1] == self.prev_target]
+                    if prev and prev[0][0] <= min(sf)[0] + 2:
+                        target = self.prev_target
                 elif carrying > 0 and home_cells:
                     target = min(home_cells, key=lambda b: dist[b])
         self.mem.targets[self.index] = target
+        self.prev_target = target
 
         #3. go to the target with a* inside the safe region
         if target is not None and target != pos:
@@ -1025,6 +1057,38 @@ class AttackAgent(BaseAgent):
             if a is not None:
                 return a
         return self.evade(gs, pos, ghosts)
+
+    def forced_attack(self, gs, pos, st, ghosts, gd):
+
+        """
+        Goes for the least defended food (or a capsule) even if it is not 100% safe.
+        Uses a* and only avoids the cells right next to a ghost.
+        """
+        if self.commit_left <= 0:
+            self.commit_left = self.COMMIT_TURNS
+            self.history.clear()
+        self.commit_left -= 1
+
+        #ghost right on top of us: let the normal logic (minimax) dodge it
+        if st.is_pacman and ghosts and gd(pos) <= 2:
+            return None
+
+        #least defended = we are much closer to it than the ghost
+        def score(c):
+            return min(gd(c), 10) - self.dist(pos, c)
+        food = self.get_food(gs).as_list()
+        caps = self.get_capsules(gs)
+        options = [(score(f), f) for f in food] + [(score(c) + 3, c) for c in caps]
+        if not options:
+            return None
+        target = max(options)[1]
+
+        allowed = {c for c in self.map.cells if self.map.is_home(c) or gd(c) > 1}
+        path = a_star_search(GridPathProblem(self.map.neighbors, pos, [target], allowed=allowed),
+                             manhattan_heuristic)
+        if path and path[0] in gs.get_legal_actions(self.index):
+            return path[0]
+        return None
 
     def minimax_escape(self, gs, pos, ghosts, carrying):
 
@@ -1075,11 +1139,16 @@ class AttackAgent(BaseAgent):
         We are home and every entrance looks guarded.
         We move to the border cell furthest from the ghosts to try to enter there.
         """
-        if ghosts:
+        #we keep the same entry for a few turns, otherwise we follow the ghost back and forth
+        if self.entry is not None and self.turn - self.entry_turn < self.ENTRY_TURNS and pos != self.entry:
+            entry = self.entry
+        elif ghosts:
             entry = max(self.map.boundary,
                         key=lambda b: min(self.dist(b, g) for g in ghosts) - 0.3 * self.dist(pos, b))
         else:
             entry = random.choice(self.map.boundary)
+        if entry != self.entry:
+            self.entry, self.entry_turn = entry, self.turn
 
         #bfs only through our side, we dont want to cross while moving
         home = {c for c in self.map.cells if self.map.is_home(c)}
@@ -1127,6 +1196,7 @@ class FlexAgent(AttackAgent):
     def choose_action(self, gs):
         self.turn += 1
         self.update_beliefs(gs)
+        self.history = (self.history + [self.my_pos(gs)])[-self.LOOP_TURNS:]
         if self.choose_role(gs) == 'defend':
             return self.defend_action(gs)
         return self.attack_action(gs)
