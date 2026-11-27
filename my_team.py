@@ -7,6 +7,7 @@
 # For more info, see http://inst.eecs.berkeley.edu/~cs188/sp09/pacman.html
 
 import random
+import time
 import contest.util as util
 
 from contest.capture_agents import CaptureAgent
@@ -241,7 +242,11 @@ def uniform_cost_search(problem):
     return a_star_search(problem, null_heuristic)
 
 
-def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, terminal):
+class TimeUp(Exception):
+    pass
+
+
+def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, terminal, deadline=None):
 
     """
     Depth limited minimax with alpha-beta pruning.
@@ -249,7 +254,10 @@ def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, term
     evaluate(state): value of a non terminal state when we reach the depth limit
     terminal(state): value if the state is terminal (caught, escaped...), else None
     Returns (value, best_move) for the player that moves at this node.
+    deadline: if we pass this time we stop the search (TimeUp), we have 1 s per move
     """
+    if deadline is not None and time.time() > deadline:
+        raise TimeUp()
     t = terminal(state)
     if t is not None:
         return t, None
@@ -262,7 +270,7 @@ def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, term
     if maximizing:
         value = float('-inf')
         for move, nxt in successors(state, True):
-            v, _ = alpha_beta(nxt, depth - 1, alpha, beta, False, successors, evaluate, terminal)
+            v, _ = alpha_beta(nxt, depth - 1, alpha, beta, False, successors, evaluate, terminal, deadline)
             if v > value:
                 value, best_move = v, move
             alpha = max(alpha, value)
@@ -275,13 +283,31 @@ def alpha_beta(state, depth, alpha, beta, maximizing, successors, evaluate, term
     else:
         value = float('inf')
         for move, nxt in successors(state, False):
-            v, _ = alpha_beta(nxt, depth - 1, alpha, beta, True, successors, evaluate, terminal)
+            v, _ = alpha_beta(nxt, depth - 1, alpha, beta, True, successors, evaluate, terminal, deadline)
             if v < value:
                 value, best_move = v, move
             beta = min(beta, value)
             if alpha >= beta:
                 break
     return value, best_move
+
+
+def timed_alpha_beta(state, max_depth, successors, evaluate, terminal, budget=0.4):
+
+    """
+    Iterative deepening over alpha_beta: depth 2, 4, ... up to max_depth while we have time.
+    If the time runs out in the middle of a depth we keep the move of the last full depth,
+    so we never pass the 1 s limit of the contest (3 warnings = we lose the game).
+    """
+    deadline = time.time() + budget
+    best = (None, None)
+    for depth in range(2, max_depth + 1, 2):
+        try:
+            best = alpha_beta(state, depth, float('-inf'), float('inf'), True,
+                              successors, evaluate, terminal, deadline)
+        except TimeUp:
+            break
+    return best
 
 
 #####################
@@ -703,8 +729,7 @@ class BaseAgent(CaptureAgent):
             return 10 * ctrl + 25 * cut / max(1, len(exits)) - self.dist(me, p)
 
         depth = self.CATCH_DEPTH if self.dist(pos, inv) <= 4 else self.CATCH_DEPTH_FAR
-        _, move = alpha_beta((pos, inv), depth, float('-inf'), float('inf'),
-                             True, successors, evaluate, terminal)
+        _, move = timed_alpha_beta((pos, inv), depth, successors, evaluate, terminal)
         if move is None:
             return None
         if move == pos:
@@ -1130,8 +1155,7 @@ class AttackAgent(BaseAgent):
             dh = min(self.dist(me, b) for b in bnd)
             return 6 * min(dg, 6) - 4 * self.map.depth[me] - 1.5 * dh
 
-        _, move = alpha_beta((pos, ghost), self.MINIMAX_DEPTH, float('-inf'), float('inf'),
-                             True, successors, evaluate, terminal)
+        _, move = timed_alpha_beta((pos, ghost), self.MINIMAX_DEPTH, successors, evaluate, terminal)
         return self.action_to(gs, move) if move is not None else None
 
     def reposition(self, gs, pos, ghosts):
