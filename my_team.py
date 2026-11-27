@@ -396,6 +396,7 @@ class TeamMemory:
         self.last_turn = -1     #timeleft when the memory was created
         self.targets = {}       #{agent_index: target position}, to not chase the same food
         self.defender = None    #index of the agent that is defending now (None = both attack)
+        self.entries = {}       #{agent_index: (border entry, turn)}, to not enter by the same place
 
 
 _MEMORY = {}
@@ -1139,16 +1140,26 @@ class AttackAgent(BaseAgent):
         We are home and every entrance looks guarded.
         We move to the border cell furthest from the ghosts to try to enter there.
         """
+        #entry that our teammate is using now (if it is also repositioning)
+        mate = [e for i, (e, t) in self.mem.entries.items()
+                if i != self.index and self.turn - t < self.ENTRY_TURNS]
+
+        #we prefer entries far from the teammate one: if both enter by the same place
+        #one defender blocks both, if we split (one up, one down) it can only block one
+        def split(b):
+            return 0.5 * min(min((self.dist(b, m) for m in mate), default=10), 10)
+
         #we keep the same entry for a few turns, otherwise we follow the ghost back and forth
         if self.entry is not None and self.turn - self.entry_turn < self.ENTRY_TURNS and pos != self.entry:
             entry = self.entry
         elif ghosts:
             entry = max(self.map.boundary,
-                        key=lambda b: min(self.dist(b, g) for g in ghosts) - 0.3 * self.dist(pos, b))
+                        key=lambda b: min(self.dist(b, g) for g in ghosts) - 0.3 * self.dist(pos, b) + split(b))
         else:
-            entry = random.choice(self.map.boundary)
+            entry = max(self.map.boundary, key=lambda b: split(b) + random.random())
         if entry != self.entry:
             self.entry, self.entry_turn = entry, self.turn
+        self.mem.entries[self.index] = (entry, self.turn)
 
         #bfs only through our side, we dont want to cross while moving
         home = {c for c in self.map.cells if self.map.is_home(c)}
